@@ -1,0 +1,16 @@
+name: Release Build
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    uses: bbapp-grp/workflow-template/.github/workflows/release-build.yml@main
+    with:
+      service_name: "CHANGE_ME"  # Update this to your microservice name
+      gcp_project_id: "bbapp-dev-440805"
+      enable_tests: false  # Python tests typically handled in Dockerfile
+    secrets:
+      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
