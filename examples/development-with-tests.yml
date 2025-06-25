@@ -1,0 +1,71 @@
+name: Development Build with Tests
+
+on:
+  push:
+    branches: [ develop ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Add your service-specific testing steps here
+      # Examples for different languages:
+      
+      # Node.js example:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run tests
+        run: npm test
+      
+      # Go example (uncomment if using Go):
+      # - name: Set up Go
+      #   uses: actions/setup-go@v4
+      #   with:
+      #     go-version: '1.21'
+      # 
+      # - name: Run tests
+      #   run: go test ./...
+      # 
+      # - name: Run linting
+      #   run: golangci-lint run
+      
+      # Python example (uncomment if using Python):
+      # - name: Set up Python
+      #   uses: actions/setup-python@v4
+      #   with:
+      #     python-version: '3.11'
+      # 
+      # - name: Install dependencies
+      #   run: |
+      #     python -m pip install --upgrade pip
+      #     pip install -r requirements.txt
+      # 
+      # - name: Run tests
+      #   run: pytest
+
+  build:
+    name: Build and Push
+    needs: test  # Wait for tests to pass
+    if: success()  # Only build if tests passed
+    
+    uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
+    with:
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+      # Optional: dockerfile_path: "docker/Dockerfile"
+      # Optional: build_context: "."
+    secrets:
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}

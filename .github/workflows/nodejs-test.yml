@@ -1,0 +1,85 @@
+name: Node.js Testing
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '20'
+      test_command:
+        description: 'Test command to run'
+        required: false
+        type: string
+        default: 'npm test'
+      lint_command:
+        description: 'Lint command to run'
+        required: false
+        type: string
+        default: 'npm run lint'
+      type_check_command:
+        description: 'Type check command to run'
+        required: false
+        type: string
+        default: 'npm run type-check'
+      enable_lint:
+        description: 'Whether to run linting'
+        required: false
+        type: boolean
+        default: true
+      enable_type_check:
+        description: 'Whether to run type checking'
+        required: false
+        type: boolean
+        default: true
+      working_directory:
+        description: 'Working directory for the project'
+        required: false
+        type: string
+        default: '.'
+    outputs:
+      test_result:
+        description: 'Test execution result'
+        value: ${{ jobs.test.outputs.result }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.test_status.outputs.result }}
+    
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run tests
+        run: ${{ inputs.test_command }}
+      
+      - name: Run linting
+        if: ${{ inputs.enable_lint }}
+        run: ${{ inputs.lint_command }}
+        continue-on-error: true
+      
+      - name: Run type checking
+        if: ${{ inputs.enable_type_check }}
+        run: ${{ inputs.type_check_command }}
+        continue-on-error: true
+      
+      - name: Set test status
+        id: test_status
+        run: echo "result=success" >> $GITHUB_OUTPUT

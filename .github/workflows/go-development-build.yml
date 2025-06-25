@@ -1,12 +1,13 @@
-name: Development Build and Push
+name: Go Development Build
 
 on:
   workflow_call:
     inputs:
       service_name:
-        description: 'Name of the microservice'
-        required: true
+        description: 'Name of the microservice (defaults to repository name)'
+        required: false
         type: string
+        default: ${{ github.event.repository.name }}
       dockerfile_path:
         description: 'Path to Dockerfile relative to repo root'
         required: false
@@ -60,7 +61,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      packages: write
 
     steps:
       - name: Checkout repository
@@ -99,10 +99,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64
+          build-args: |
+            BUILDTIME=${{ github.run_id }}
+            VERSION=develop-${{ github.sha }}
 
       - name: Output image details
         run: |
-          echo "Image tags: ${{ steps.meta.outputs.tags }}"
-          echo "Image digest: ${{ steps.build.outputs.digest }}"
-          echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "🚀 Go development build completed!"
+          echo "📦 Image tags: ${{ steps.meta.outputs.tags }}"
+          echo "🔗 Digest: ${{ steps.build.outputs.digest }}"
+          echo "🏷️  Repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "📝 All build logic handled in Dockerfile"

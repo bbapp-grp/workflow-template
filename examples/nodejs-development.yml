@@ -1,3 +1,4 @@
+# Node.js Development Workflow with Testing
 name: Development Build
 
 on:
@@ -5,13 +6,43 @@ on:
     branches: [ develop ]
 
 jobs:
+  test:
+    name: Run Tests
+    uses: bbapp-grp/workflow-template/.github/workflows/nodejs-test.yml@main
+    with:
+      node_version: '20'
+      test_command: 'npm test'
+      lint_command: 'npm run lint'
+      type_check_command: 'npm run type-check'
+      enable_lint: true
+      enable_type_check: true
+
   build:
+    name: Build and Push
+    needs: test
+    if: success()
+    
     uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
     with:
-      service_name: "CHANGE_ME"  # Update this to your microservice name
-      gcp_project_id: "bbapp-dev-440805"
-      enable_tests: true
-      test_command: "npm test"
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
     secrets:
-      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
-      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+  update-manifests:
+    name: Update K8s Manifests
+    needs: build
+    if: success()
+    
+    uses: bbapp-grp/workflow-template/.github/workflows/gitops-update.yml@main
+    with:
+      service_name: ${{ github.event.repository.name }}
+      image_tag: ${{ needs.build.outputs.image_tag }}
+      image_digest: ${{ needs.build.outputs.image_digest }}
+      k8s_repo: 'bbapp-grp/k8s'
+      k8s_repo_branch: 'main'
+      kustomize_path: 'overlays/dev'
+      create_pr: false  # Direct commit for dev environment
+    secrets:
+      K8S_REPO_TOKEN: ${{ secrets.K8S_REPO_TOKEN }}

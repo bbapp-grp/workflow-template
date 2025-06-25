@@ -1,0 +1,19 @@
+name: Advanced Development Build
+
+on:
+  push:
+    branches: [ develop ]
+
+jobs:
+  build:
+    uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
+    with:
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+      dockerfile_path: "docker/Dockerfile"  # Custom Dockerfile location
+      build_context: "."                     # Build context
+      artifact_registry_region: "us-west1"  # Different region
+      artifact_registry_repo: "my-custom-repo"  # Custom repository
+    secrets:
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}

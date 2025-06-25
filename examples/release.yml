@@ -1,0 +1,18 @@
+name: Release Build
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    uses: bbapp-grp/workflow-template/.github/workflows/release-build.yml@main
+    with:
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+      # Optional: dockerfile_path: "docker/Dockerfile"  # If not in root
+      # Optional: build_context: "."                     # Build context
+      # Optional: tag_prefix: "v"                        # Version tag prefix
+    secrets:
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}

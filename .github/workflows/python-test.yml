@@ -1,0 +1,111 @@
+name: Python Testing
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.11'
+      test_command:
+        description: 'Test command to run'
+        required: false
+        type: string
+        default: 'pytest'
+      lint_command:
+        description: 'Lint command to run'
+        required: false
+        type: string
+        default: 'flake8 .'
+      format_check_command:
+        description: 'Format check command to run'
+        required: false
+        type: string
+        default: 'black --check .'
+      type_check_command:
+        description: 'Type check command to run'
+        required: false
+        type: string
+        default: 'mypy .'
+      enable_lint:
+        description: 'Whether to run linting'
+        required: false
+        type: boolean
+        default: true
+      enable_format_check:
+        description: 'Whether to run format checking'
+        required: false
+        type: boolean
+        default: true
+      enable_type_check:
+        description: 'Whether to run type checking'
+        required: false
+        type: boolean
+        default: true
+      requirements_file:
+        description: 'Requirements file path'
+        required: false
+        type: string
+        default: 'requirements.txt'
+      working_directory:
+        description: 'Working directory for the project'
+        required: false
+        type: string
+        default: '.'
+    outputs:
+      test_result:
+        description: 'Test execution result'
+        value: ${{ jobs.test.outputs.result }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.test_status.outputs.result }}
+    
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: 'pip'
+          cache-dependency-path: ${{ inputs.working_directory }}/${{ inputs.requirements_file }}
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "${{ inputs.requirements_file }}" ]; then
+            pip install -r ${{ inputs.requirements_file }}
+          fi
+          # Install common test dependencies
+          pip install pytest flake8 black mypy
+      
+      - name: Run tests
+        run: ${{ inputs.test_command }}
+      
+      - name: Run linting
+        if: ${{ inputs.enable_lint }}
+        run: ${{ inputs.lint_command }}
+        continue-on-error: true
+      
+      - name: Run format checking
+        if: ${{ inputs.enable_format_check }}
+        run: ${{ inputs.format_check_command }}
+        continue-on-error: true
+      
+      - name: Run type checking
+        if: ${{ inputs.enable_type_check }}
+        run: ${{ inputs.type_check_command }}
+        continue-on-error: true
+      
+      - name: Set test status
+        id: test_status
+        run: echo "result=success" >> $GITHUB_OUTPUT

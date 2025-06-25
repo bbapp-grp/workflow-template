@@ -1,12 +1,13 @@
-name: Release Build and Push
+name: Simple Container Build and Push
 
 on:
   workflow_call:
     inputs:
       service_name:
-        description: 'Name of the microservice'
-        required: true
+        description: 'Name of the microservice (defaults to repository name)'
+        required: false
         type: string
+        default: ${{ github.event.repository.name }}
       dockerfile_path:
         description: 'Path to Dockerfile relative to repo root'
         required: false
@@ -31,11 +32,16 @@ on:
         required: false
         type: string
         default: 'bbapp-microservices'
-      tag_prefix:
-        description: 'Prefix for version tags'
+      image_tag_suffix:
+        description: 'Additional tag suffix for development builds'
         required: false
         type: string
-        default: 'v'
+        default: 'latest'
+      build_args:
+        description: 'Docker build arguments (JSON object as string)'
+        required: false
+        type: string
+        default: '{}'
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation Provider'
@@ -50,9 +56,6 @@ on:
       image_digest:
         description: 'The image digest'
         value: ${{ jobs.build.outputs.image_digest }}
-      version_tag:
-        description: 'The version tag that was created'
-        value: ${{ jobs.build.outputs.version_tag }}
 
 env:
   REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
@@ -64,49 +67,15 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
-      version_tag: ${{ steps.calver.outputs.version }}
     
     permissions:
-      contents: write
+      contents: read
       id-token: write
       packages: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Generate CalVer version
-        id: calver
-        run: |
-          # Generate CalVer format: YY.MM.PATCH (e.g., 24.06.1)
-          YEAR=$(date +%y)
-          MONTH=$(date +%m)
-          
-          # Get the latest tag for this year.month pattern
-          LATEST_TAG=$(git tag -l "${{ inputs.tag_prefix }}${YEAR}.${MONTH}.*" | sort -V | tail -1)
-          
-          if [ -z "$LATEST_TAG" ]; then
-            # No previous tag for this year.month, start with patch 1
-            PATCH=1
-          else
-            # Extract patch number and increment
-            PATCH=$(echo "$LATEST_TAG" | sed 's/.*\.//' | sed 's/[^0-9]*//g')
-            PATCH=$((PATCH + 1))
-          fi
-          
-          VERSION="${YEAR}.${MONTH}.${PATCH}"
-          FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
-          
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
-          echo "Generated version: ${FULL_TAG}"
-
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.calver.outputs.full_tag }}
-          git push origin ${{ steps.calver.outputs.full_tag }}
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -127,9 +96,15 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.calver.outputs.version }}
-            type=raw,value=${{ steps.calver.outputs.full_tag }}
+            type=raw,value=${{ inputs.image_tag_suffix }}
+            type=sha,prefix={{branch}}-
+
+      - name: Parse build args
+        id: build_args
+        run: |
+          echo "args<<EOF" >> $GITHUB_OUTPUT
+          echo '${{ inputs.build_args }}' | jq -r 'to_entries | map("\(.key)=\(.value)") | join("\n")'
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         id: build
@@ -140,33 +115,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ steps.build_args.outputs.args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64
-
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          tag_name: ${{ steps.calver.outputs.full_tag }}
-          release_name: Release ${{ steps.calver.outputs.full_tag }}
-          body: |
-            ## Changes in ${{ steps.calver.outputs.full_tag }}
-            
-            ### Docker Image
-            - **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.calver.outputs.version }}`
-            - **Digest**: `${{ steps.build.outputs.digest }}`
-            
-            ### Deployment
-            This release can be deployed to Kubernetes using the image tag `${{ steps.calver.outputs.version }}`.
-          draft: false
-          prerelease: false
 
       - name: Output image details
         run: |
-          echo "Version: ${{ steps.calver.outputs.version }}"
-          echo "Full tag: ${{ steps.calver.outputs.full_tag }}"
           echo "Image tags: ${{ steps.meta.outputs.tags }}"
           echo "Image digest: ${{ steps.build.outputs.digest }}"
           echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"

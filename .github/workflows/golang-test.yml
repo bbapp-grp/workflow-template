@@ -1,0 +1,98 @@
+name: Go Testing
+
+on:
+  workflow_call:
+    inputs:
+      go_version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: '1.21'
+      test_command:
+        description: 'Test command to run'
+        required: false
+        type: string
+        default: 'go test ./...'
+      lint_command:
+        description: 'Lint command to run'
+        required: false
+        type: string
+        default: 'golangci-lint run'
+      vet_command:
+        description: 'Vet command to run'
+        required: false
+        type: string
+        default: 'go vet ./...'
+      enable_lint:
+        description: 'Whether to run linting'
+        required: false
+        type: boolean
+        default: true
+      enable_vet:
+        description: 'Whether to run go vet'
+        required: false
+        type: boolean
+        default: true
+      enable_race_detection:
+        description: 'Whether to run tests with race detection'
+        required: false
+        type: boolean
+        default: true
+      working_directory:
+        description: 'Working directory for the project'
+        required: false
+        type: string
+        default: '.'
+    outputs:
+      test_result:
+        description: 'Test execution result'
+        value: ${{ jobs.test.outputs.result }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.test_status.outputs.result }}
+    
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ inputs.go_version }}
+          cache-dependency-path: ${{ inputs.working_directory }}/go.sum
+      
+      - name: Download dependencies
+        run: go mod download
+      
+      - name: Run go vet
+        if: ${{ inputs.enable_vet }}
+        run: ${{ inputs.vet_command }}
+      
+      - name: Run tests
+        run: ${{ inputs.test_command }}
+      
+      - name: Run tests with race detection
+        if: ${{ inputs.enable_race_detection }}
+        run: go test -race ./...
+      
+      - name: Install golangci-lint
+        if: ${{ inputs.enable_lint }}
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+      
+      - name: Run linting
+        if: ${{ inputs.enable_lint }}
+        run: ${{ inputs.lint_command }}
+        continue-on-error: true
+      
+      - name: Set test status
+        id: test_status
+        run: echo "result=success" >> $GITHUB_OUTPUT

@@ -1,12 +1,13 @@
-name: Development Build and Push
+name: Kaniko Container Build and Push
 
 on:
   workflow_call:
     inputs:
       service_name:
-        description: 'Name of the microservice'
-        required: true
+        description: 'Name of the microservice (defaults to repository name)'
+        required: false
         type: string
+        default: ${{ github.event.repository.name }}
       dockerfile_path:
         description: 'Path to Dockerfile relative to repo root'
         required: false
@@ -31,6 +32,11 @@ on:
         required: false
         type: string
         default: 'bbapp-microservices'
+      image_tag_suffix:
+        description: 'Additional tag suffix for development builds'
+        required: false
+        type: string
+        default: 'latest'
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation Provider'
@@ -42,9 +48,6 @@ on:
       image_tag:
         description: 'The full image tag that was built and pushed'
         value: ${{ jobs.build.outputs.image_tag }}
-      image_digest:
-        description: 'The image digest'
-        value: ${{ jobs.build.outputs.image_digest }}
 
 env:
   REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
@@ -54,13 +57,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      image_tag: ${{ steps.meta.outputs.tags }}
-      image_digest: ${{ steps.build.outputs.digest }}
+      image_tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag_suffix }}
     
     permissions:
       contents: read
       id-token: write
-      packages: write
 
     steps:
       - name: Checkout repository
@@ -73,36 +74,19 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker to use gcloud as a credential helper
-        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Build and push with Kaniko
+        uses: aevea/action-kaniko@master
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=develop-
-
-      - name: Build and push Docker image
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: ${{ inputs.build_context }}
-          file: ${{ inputs.dockerfile_path }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
+          registry: ${{ env.REGISTRY }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+          image: ${{ env.IMAGE_NAME }}
+          tag: ${{ inputs.image_tag_suffix }}
+          path: ${{ inputs.build_context }}
+          build_file: ${{ inputs.dockerfile_path }}
+          cache: true
+          cache_registry: ${{ env.REGISTRY }}/${{ inputs.gcp_project_id }}/cache
 
       - name: Output image details
         run: |
-          echo "Image tags: ${{ steps.meta.outputs.tags }}"
-          echo "Image digest: ${{ steps.build.outputs.digest }}"
-          echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "Image built and pushed: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag_suffix }}"

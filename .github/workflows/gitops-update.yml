@@ -1,0 +1,185 @@
+name: GitOps Manifest Update
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Name of the service to update'
+        required: true
+        type: string
+      image_tag:
+        description: 'New image tag to deploy'
+        required: true
+        type: string
+      image_digest:
+        description: 'Image digest for verification'
+        required: false
+        type: string
+      k8s_repo:
+        description: 'Kubernetes manifests repository'
+        required: false
+        type: string
+        default: 'bbapp-grp/k8s'
+      k8s_repo_branch:
+        description: 'Branch to update in k8s repo'
+        required: false
+        type: string
+        default: 'main'
+      kustomize_path:
+        description: 'Path to kustomize overlay for the service'
+        required: false
+        type: string
+        default: 'overlays/dev'
+      create_pr:
+        description: 'Create PR instead of direct commit'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      K8S_REPO_TOKEN:
+        description: 'GitHub token with access to k8s repository'
+        required: true
+
+jobs:
+  update-manifests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout k8s repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.k8s_repo }}
+          token: ${{ secrets.K8S_REPO_TOKEN }}
+          ref: ${{ inputs.k8s_repo_branch }}
+          path: k8s-repo
+      
+      - name: Update kustomization with new image
+        working-directory: k8s-repo/${{ inputs.kustomize_path }}
+        run: |
+          # Check if kustomization.yaml exists
+          if [ ! -f kustomization.yaml ]; then
+            echo "❌ kustomization.yaml not found in ${{ inputs.kustomize_path }}"
+            exit 1
+          fi
+          
+          # Update or add image tag in kustomization.yaml
+          if grep -q "name: .*${{ inputs.service_name }}" kustomization.yaml; then
+            # Update existing image entry
+            echo "📝 Updating existing image entry for ${{ inputs.service_name }}"
+            sed -i.bak "/name: .*${{ inputs.service_name }}/,+1s|newTag: .*|newTag: ${{ inputs.image_tag }}|" kustomization.yaml
+          else
+            # Add new image entry
+            echo "➕ Adding new image entry for ${{ inputs.service_name }}"
+            echo "" >> kustomization.yaml
+            echo "images:" >> kustomization.yaml
+            echo "  - name: ${{ inputs.service_name }}" >> kustomization.yaml
+            echo "    newTag: ${{ inputs.image_tag }}" >> kustomization.yaml
+          fi
+          
+          # Show the changes
+          echo "📋 Updated kustomization.yaml:"
+          cat kustomization.yaml
+      
+      - name: Validate kustomize build
+        working-directory: k8s-repo/${{ inputs.kustomize_path }}
+        run: |
+          # Install kustomize if not available
+          if ! command -v kustomize &> /dev/null; then
+            echo "📦 Installing kustomize..."
+            curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+            sudo mv kustomize /usr/local/bin/
+          fi
+          
+          # Validate the kustomization
+          echo "✅ Validating kustomization..."
+          kustomize build . > /dev/null
+          echo "✅ Kustomization validation successful"
+      
+      - name: Create Pull Request
+        if: ${{ inputs.create_pr }}
+        working-directory: k8s-repo
+        run: |
+          # Configure git
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Create branch for PR
+          BRANCH_NAME="update-${{ inputs.service_name }}-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b $BRANCH_NAME
+          
+          # Commit changes
+          git add .
+          git commit -m "🚀 Update ${{ inputs.service_name }} to ${{ inputs.image_tag }}
+          
+          - Service: ${{ inputs.service_name }}
+          - New tag: ${{ inputs.image_tag }}
+          - Digest: ${{ inputs.image_digest }}
+          - Updated by: GitHub Actions
+          - Triggered by: ${{ github.repository }}@${{ github.sha }}"
+          
+          # Push branch
+          git push origin $BRANCH_NAME
+          
+          # Create PR using GitHub CLI
+          gh pr create \
+            --title "🚀 Deploy ${{ inputs.service_name }} ${{ inputs.image_tag }}" \
+            --body "## Deployment Update
+          
+          **Service:** ${{ inputs.service_name }}  
+          **New Image Tag:** ${{ inputs.image_tag }}  
+          **Image Digest:** ${{ inputs.image_digest }}  
+          **Source:** ${{ github.repository }}@${{ github.sha }}
+          
+          ### Changes
+          - Updated kustomization.yaml in ${{ inputs.kustomize_path }}
+          - New image tag: ${{ inputs.image_tag }}
+          
+          ### Validation
+          - ✅ Kustomize build validation passed
+          
+          **Auto-generated by GitHub Actions**" \
+            --head $BRANCH_NAME \
+            --base ${{ inputs.k8s_repo_branch }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.K8S_REPO_TOKEN }}
+      
+      - name: Direct Commit
+        if: ${{ !inputs.create_pr }}
+        working-directory: k8s-repo
+        run: |
+          # Configure git
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Check if there are changes
+          if git diff --quiet; then
+            echo "ℹ️ No changes detected, skipping commit"
+            exit 0
+          fi
+          
+          # Commit and push changes
+          git add .
+          git commit -m "🚀 Update ${{ inputs.service_name }} to ${{ inputs.image_tag }}
+          
+          - Service: ${{ inputs.service_name }}
+          - New tag: ${{ inputs.image_tag }}
+          - Digest: ${{ inputs.image_digest }}
+          - Updated by: GitHub Actions
+          - Triggered by: ${{ github.repository }}@${{ github.sha }}"
+          
+          git push origin ${{ inputs.k8s_repo_branch }}
+          
+          echo "✅ Successfully updated manifests for ${{ inputs.service_name }}"
+      
+      - name: Summary
+        run: |
+          echo "## 🎉 GitOps Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ inputs.service_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**New Image Tag:** ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Digest:** ${{ inputs.image_digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "**K8s Repository:** ${{ inputs.k8s_repo }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Kustomize Path:** ${{ inputs.kustomize_path }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Update Method:** ${{ inputs.create_pr && 'Pull Request' || 'Direct Commit' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Manifest update completed successfully!" >> $GITHUB_STEP_SUMMARY

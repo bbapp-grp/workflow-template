@@ -1,4 +1,4 @@
-# Python Development Workflow with Testing
+# Go Development Workflow with Testing
 name: Development Build
 
 on:
@@ -8,17 +8,15 @@ on:
 jobs:
   test:
     name: Run Tests
-    uses: bbapp-grp/workflow-template/.github/workflows/python-test.yml@main
+    uses: bbapp-grp/workflow-template/.github/workflows/golang-test.yml@main
     with:
-      python_version: '3.11'
-      test_command: 'pytest'
-      lint_command: 'flake8 .'
-      format_check_command: 'black --check .'
-      type_check_command: 'mypy .'
+      go_version: '1.21'
+      test_command: 'go test ./...'
+      lint_command: 'golangci-lint run'
+      vet_command: 'go vet ./...'
       enable_lint: true
-      enable_format_check: true
-      enable_type_check: true
-      requirements_file: 'requirements.txt'
+      enable_vet: true
+      enable_race_detection: true
 
   build:
     name: Build and Push

@@ -1,12 +1,13 @@
-name: Release Build and Push
+name: Go Release Build
 
 on:
   workflow_call:
     inputs:
       service_name:
-        description: 'Name of the microservice'
-        required: true
+        description: 'Name of the microservice (defaults to repository name)'
+        required: false
         type: string
+        default: ${{ github.event.repository.name }}
       dockerfile_path:
         description: 'Path to Dockerfile relative to repo root'
         required: false
@@ -69,7 +70,6 @@ jobs:
     permissions:
       contents: write
       id-token: write
-      packages: write
 
     steps:
       - name: Checkout repository
@@ -78,7 +78,7 @@ jobs:
       - name: Generate CalVer version
         id: calver
         run: |
-          # Generate CalVer format: YY.MM.PATCH (e.g., 24.06.1)
+          # Generate CalVer format: YY.MM.PATCH (e.g., 25.06.1)
           YEAR=$(date +%y)
           MONTH=$(date +%m)
           
@@ -142,7 +142,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64
+          build-args: |
+            BUILDTIME=${{ github.run_id }}
+            VERSION=${{ steps.calver.outputs.version }}
 
       - name: Create GitHub Release
         uses: actions/create-release@v1
@@ -152,11 +154,16 @@ jobs:
           tag_name: ${{ steps.calver.outputs.full_tag }}
           release_name: Release ${{ steps.calver.outputs.full_tag }}
           body: |
-            ## Changes in ${{ steps.calver.outputs.full_tag }}
+            ## Go Microservice Release ${{ steps.calver.outputs.full_tag }}
             
             ### Docker Image
             - **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.calver.outputs.version }}`
             - **Digest**: `${{ steps.build.outputs.digest }}`
+            
+            ### Build Details
+            - **Built with**: Docker multi-stage build
+            - **All logic in**: Dockerfile (Go compilation, testing, optimization)
+            - **Build Args**: VERSION=${{ steps.calver.outputs.version }}, BUILDTIME=${{ github.run_id }}
             
             ### Deployment
             This release can be deployed to Kubernetes using the image tag `${{ steps.calver.outputs.version }}`.
@@ -165,8 +172,9 @@ jobs:
 
       - name: Output image details
         run: |
-          echo "Version: ${{ steps.calver.outputs.version }}"
-          echo "Full tag: ${{ steps.calver.outputs.full_tag }}"
-          echo "Image tags: ${{ steps.meta.outputs.tags }}"
-          echo "Image digest: ${{ steps.build.outputs.digest }}"
-          echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "🎉 Go release build completed!"
+          echo "📦 Version: ${{ steps.calver.outputs.version }}"
+          echo "🏷️  Full tag: ${{ steps.calver.outputs.full_tag }}"
+          echo "📦 Image tags: ${{ steps.meta.outputs.tags }}"
+          echo "🔗 Digest: ${{ steps.build.outputs.digest }}"
+          echo "🏗️  All build logic handled in Dockerfile"

@@ -20,7 +20,6 @@ Triggers on pushes to the `develop` branch and builds images with `latest` and c
 
 **Key Features:**
 - Tags images with `latest` and `develop-<sha>`
-- Optional test execution
 - Configurable build commands
 - Outputs image tags and digest for GitOps integration
 
@@ -33,6 +32,57 @@ Triggers on pushes to the `main` branch, creates CalVer tags, and builds product
 - Creates GitHub releases with deployment information
 - Tags images with version numbers
 - Git tag creation and push
+
+### 3. GitOps Manifest Update (`gitops-update.yml`)
+
+Updates Kubernetes manifests in a separate repository after successful image builds.
+
+**Key Features:**
+- Updates kustomize image tags automatically
+- Supports both direct commits and PR creation
+- Validates kustomization before committing
+- Configurable for different environments (dev/staging/prod)
+- Detailed commit messages with traceability
+
+### 4. Test Templates
+
+Language-specific reusable test workflows that can be used as separate jobs before building:
+
+#### Node.js Test Template (`nodejs-test.yml`)
+```yaml
+test:
+  uses: bbapp-grp/workflow-template/.github/workflows/nodejs-test.yml@main
+  with:
+    node_version: '20'
+    test_command: 'npm test'
+    lint_command: 'npm run lint'
+    type_check_command: 'npm run type-check'
+    enable_lint: true
+    enable_type_check: true
+```
+
+#### Go Test Template (`golang-test.yml`)
+```yaml
+test:
+  uses: bbapp-grp/workflow-template/.github/workflows/golang-test.yml@main
+  with:
+    go_version: '1.21'
+    test_command: 'go test ./...'
+    lint_command: 'golangci-lint run'
+    enable_race_detection: true
+```
+
+#### Python Test Template (`python-test.yml`)
+```yaml
+test:
+  uses: bbapp-grp/workflow-template/.github/workflows/python-test.yml@main
+  with:
+    python_version: '3.11'
+    test_command: 'pytest'
+    lint_command: 'flake8 .'
+    format_check_command: 'black --check .'
+    type_check_command: 'mypy .'
+```
 
 ## Prerequisites
 
@@ -57,9 +107,20 @@ Your microservice repository should have:
 - A `package.json` if using Node.js features
 - Proper test scripts if enabling test execution
 
+### 4. GitOps Integration (Optional)
+
+For automatic Kubernetes manifest updates:
+
+- **K8s Repository**: A separate repository (e.g., `bbapp-grp/k8s`) with kustomize manifests
+- **Kustomize Structure**: Base manifests and environment overlays
+- **GitHub Token**: Personal Access Token with access to the k8s repository
+- **FluxCD**: Configured to watch the k8s repository
+
+See [`examples/k8s-repo-structure.md`](examples/k8s-repo-structure.md) for detailed setup instructions.
+
 ## Usage Examples
 
-### Basic Node.js Microservice
+### Node.js Microservice (Recommended)
 
 Create `.github/workflows/development.yml`:
 
@@ -71,16 +132,28 @@ on:
     branches: [ develop ]
 
 jobs:
+  test:
+    name: Run Tests
+    uses: bbapp-grp/workflow-template/.github/workflows/nodejs-test.yml@main
+    with:
+      node_version: '20'
+      test_command: 'npm test'
+      lint_command: 'npm run lint'
+      type_check_command: 'npm run type-check'
+      enable_lint: true
+      enable_type_check: true
+
   build:
+    name: Build and Push
+    needs: test
+    if: success()
     uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
     with:
-      service_name: "my-service"
-      gcp_project_id: "bbapp-dev-440805"
-      enable_tests: true
-      test_command: "npm test"
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
     secrets:
-      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
-      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 ```
 
 Create `.github/workflows/release.yml`:
@@ -93,67 +166,28 @@ on:
     branches: [ main ]
 
 jobs:
+  test:
+    name: Run Tests
+    uses: bbapp-grp/workflow-template/.github/workflows/nodejs-test.yml@main
+    with:
+      node_version: '20'
+      test_command: 'npm test'
+      lint_command: 'npm run lint'
+      type_check_command: 'npm run type-check'
+      enable_lint: true
+      enable_type_check: true
+
   build:
+    name: Build and Push
+    needs: test
+    if: success()
     uses: bbapp-grp/workflow-template/.github/workflows/release-build.yml@main
     with:
-      service_name: "my-service"
-      gcp_project_id: "bbapp-dev-440805"
-      enable_tests: true
-      test_command: "npm test"
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
     secrets:
-      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
-      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-```
-
-### Advanced Configuration
-
-For microservices with custom requirements:
-
-```yaml
-name: Development Build
-
-on:
-  push:
-    branches: [ develop ]
-
-jobs:
-  build:
-    uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
-    with:
-      service_name: "my-complex-service"
-      gcp_project_id: "bbapp-dev-440805"
-      dockerfile_path: "docker/Dockerfile"
-      build_context: "."
-      node_version: "18"
-      enable_tests: true
-      test_command: "npm run test:ci"
-      build_command: "npm run build"
-      artifact_registry_region: "us-west1"
-      artifact_registry_repo: "my-custom-repo"
-    secrets:
-      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
-      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-```
-
-### Python Microservice
-
-```yaml
-name: Development Build
-
-on:
-  push:
-    branches: [ develop ]
-
-jobs:
-  build:
-    uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
-    with:
-      service_name: "python-service"
-      gcp_project_id: "bbapp-dev-440805"
-      enable_tests: false  # Handle tests in Dockerfile
-    secrets:
-      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
-      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 ```
 
 ### Go Microservice
@@ -166,16 +200,77 @@ on:
     branches: [ develop ]
 
 jobs:
+  test:
+    uses: bbapp-grp/workflow-template/.github/workflows/golang-test.yml@main
+    with:
+      go_version: '1.21'
+      test_command: 'go test ./...'
+      lint_command: 'golangci-lint run'
+      enable_race_detection: true
+
+  build:
+    needs: test
+    if: success()
+    uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
+    with:
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+    secrets:
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+```
+
+### Python Microservice
+
+```yaml
+name: Development Build
+
+on:
+  push:
+    branches: [ develop ]
+
+jobs:
+  test:
+    uses: bbapp-grp/workflow-template/.github/workflows/python-test.yml@main
+    with:
+      python_version: '3.11'
+      test_command: 'pytest'
+      lint_command: 'flake8 .'
+      format_check_command: 'black --check .'
+      type_check_command: 'mypy .'
+
+  build:
+    needs: test
+    if: success()
+    uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
+    with:
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+    secrets:
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+```
+
+### Basic Microservice (Docker-only testing)
+
+For services that prefer to handle all testing in the Dockerfile:
+
+```yaml
+name: Development Build
+
+on:
+  push:
+    branches: [ develop ]
+
+jobs:
   build:
     uses: bbapp-grp/workflow-template/.github/workflows/development-build.yml@main
     with:
-      service_name: "go-service"
-      gcp_project_id: "bbapp-dev-440805"
-      enable_tests: false  # Go tests handled in Dockerfile
-      dockerfile_path: "Dockerfile"
+      service_name: ${{ github.event.repository.name }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
     secrets:
-      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
-      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 ```
 
 ## GitOps Integration
