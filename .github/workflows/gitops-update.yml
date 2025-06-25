@@ -66,14 +66,18 @@ jobs:
           if grep -q "name: .*${{ inputs.service_name }}" kustomization.yaml; then
             # Update existing image entry
             echo "📝 Updating existing image entry for ${{ inputs.service_name }}"
-            sed -i.bak "/name: .*${{ inputs.service_name }}/,+1s|newTag: .*|newTag: ${{ inputs.image_tag }}|" kustomization.yaml
+            # Escape forward slashes in the image tag
+            ESCAPED_TAG=$(echo "${{ inputs.image_tag }}" | sed 's/[\/&]/\\&/g')
+            # Use a different delimiter (#) for sed to avoid issues with slashes in the tag
+            sed -i.bak "/name: .*${{ inputs.service_name }}/,+1s#newTag: .*#newTag: $ESCAPED_TAG#" kustomization.yaml
           else
             # Add new image entry
             echo "➕ Adding new image entry for ${{ inputs.service_name }}"
             echo "" >> kustomization.yaml
             echo "images:" >> kustomization.yaml
             echo "  - name: ${{ inputs.service_name }}" >> kustomization.yaml
-            echo "    newTag: ${{ inputs.image_tag }}" >> kustomization.yaml
+            # Use the escaped tag
+            echo "    newTag: $ESCAPED_TAG" >> kustomization.yaml
           fi
           
           # Show the changes
