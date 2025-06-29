@@ -102,23 +102,99 @@ jobs:
             echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
             echo "Using provided version: ${FULL_TAG}"
           else
-            # Use the robust CalVer script
+            # Embedded CalVer logic with conflict resolution
             echo "Generating CalVer version with robust conflict resolution..."
-            FULL_TAG=$(./scripts/create-calver-tag.sh --prefix=${{ inputs.tag_prefix }} --format=YY.MM.PATCH)
-            VERSION_WITHOUT_PREFIX="${FULL_TAG#${{ inputs.tag_prefix }}}"
             
+            # Configuration
+            PREFIX="${{ inputs.tag_prefix }}"
+            FORMAT="YY.MM.PATCH"
+            
+            # Configure git user for CI
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            
+            # Get current date components
+            YEAR=$(date +%y)
+            MONTH=$(date +%m)
+            YEAR_MONTH="${YEAR}.${MONTH}"
+            
+            echo "[INFO] Current period: $YEAR_MONTH"
+            
+            # Fetch all remote tags
+            echo "[INFO] Fetching all remote tags..."
+            git fetch --tags --force origin 2>/dev/null || git fetch --tags origin 2>/dev/null || true
+            
+            # Find all existing tags for this year.month pattern
+            PATTERN="${PREFIX}${YEAR_MONTH}.*"
+            echo "[INFO] Searching for existing tags with pattern: $PATTERN"
+            
+            # Get all matching tags
+            ALL_TAGS=$(git tag -l "$PATTERN" 2>/dev/null || echo "")
+            if git remote get-url origin >/dev/null 2>&1; then
+                REMOTE_TAGS=$(git ls-remote --tags origin 2>/dev/null | \
+                              grep "refs/tags/${PREFIX}${YEAR_MONTH}\." | \
+                              sed 's|.*refs/tags/||' || echo "")
+                if [[ -n "$REMOTE_TAGS" ]]; then
+                    ALL_TAGS=$(printf "%s\n%s" "$ALL_TAGS" "$REMOTE_TAGS" | sort -u | grep -v '^$' || echo "")
+                fi
+            fi
+            
+            # Find the highest patch number
+            HIGHEST_PATCH=0
+            if [[ -n "$ALL_TAGS" ]]; then
+                echo "[INFO] Existing tags found for $YEAR_MONTH"
+                while read -r tag; do
+                    if [[ -n "$tag" && "$tag" =~ ^${PREFIX}${YEAR_MONTH}\.([0-9]+)$ ]]; then
+                        PATCH="${BASH_REMATCH[1]}"
+                        if [[ "$PATCH" -gt "$HIGHEST_PATCH" ]]; then
+                            HIGHEST_PATCH="$PATCH"
+                        fi
+                    fi
+                done <<< "$ALL_TAGS"
+                echo "[INFO] Highest existing patch number: $HIGHEST_PATCH"
+            else
+                echo "[INFO] No existing tags found for $YEAR_MONTH"
+            fi
+            
+            # Generate next patch number
+            NEXT_PATCH=$((HIGHEST_PATCH + 1))
+            NEW_TAG="${PREFIX}${YEAR_MONTH}.${NEXT_PATCH}"
+            
+            echo "[SUCCESS] Generated new tag: $NEW_TAG"
+            
+            # Double-check the tag doesn't exist
+            if git tag -l "$NEW_TAG" | grep -q "^${NEW_TAG}$" 2>/dev/null; then
+                echo "[ERROR] Tag $NEW_TAG already exists locally!"
+                exit 1
+            fi
+            
+            if git remote get-url origin >/dev/null 2>&1; then
+                if git ls-remote --tags origin 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+                    echo "[ERROR] Tag $NEW_TAG already exists on remote!"
+                    exit 1
+                fi
+            fi
+            
+            # Create and push the tag
+            echo "[INFO] Creating tag: $NEW_TAG"
+            git tag "$NEW_TAG" -m "Release $NEW_TAG [skip ci]"
+            echo "[SUCCESS] Created local tag: $NEW_TAG"
+            
+            echo "[INFO] Pushing tag to remote..."
+            if git push origin "$NEW_TAG" 2>/dev/null; then
+                echo "[SUCCESS] Successfully pushed tag to remote: $NEW_TAG"
+            else
+                echo "[ERROR] Failed to push tag to remote"
+                git tag -d "$NEW_TAG" 2>/dev/null || true
+                exit 1
+            fi
+            
+            # Set outputs
+            VERSION_WITHOUT_PREFIX="${NEW_TAG#${{ inputs.tag_prefix }}}"
             echo "version=${VERSION_WITHOUT_PREFIX}" >> $GITHUB_OUTPUT
-            echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
-            echo "Generated and pushed tag: ${FULL_TAG}"
-          fi            
-            VERSION="${YEAR}.${MONTH}.${PATCH}"
-            FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
-            
-            echo "version=${VERSION}" >> $GITHUB_OUTPUT
-            echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
-            echo "Generated CalVer version: ${FULL_TAG}"
+            echo "full_tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+            echo "Generated and pushed tag: ${NEW_TAG}"
           fi
-
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -191,7 +267,7 @@ jobs:
       - name: Output image details
         run: |
           echo "🎉 Go release build completed!"
-          echo "�� Version: ${{ steps.version.outputs.version }}"
+          echo "📦 Version: ${{ steps.version.outputs.version }}"
           echo "🏷️  Full tag: ${{ steps.version.outputs.full_tag }}"
           echo "📦 Image tags: ${{ steps.meta.outputs.tags }}"
           echo "🔗 Digest: ${{ steps.build.outputs.digest }}"
