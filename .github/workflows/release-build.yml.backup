@@ -36,11 +36,6 @@ on:
         required: false
         type: string
         default: 'v'
-      calver_format:
-        description: 'CalVer format: YY.MM.PATCH or YYYY.MM.PATCH'
-        required: false
-        type: string
-        default: 'YY.MM.PATCH'
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation Provider'
@@ -80,33 +75,38 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup CalVer script
-        run: |
-          # Create the CalVer script if it doesn't exist in the repo
-          if [ ! -f "scripts/create-calver-tag.sh" ]; then
-            echo "📥 CalVer script not found in repo, downloading from workflow template..."
-            mkdir -p scripts
-            curl -sSL https://raw.githubusercontent.com/bbapp-grp/workflow-template/main/scripts/create-calver-tag.sh -o scripts/create-calver-tag.sh
-            chmod +x scripts/create-calver-tag.sh
-          else
-            echo "✅ Using CalVer script from repository"
-            chmod +x scripts/create-calver-tag.sh
-          fi
-
-      - name: Generate CalVer version and create tag
+      - name: Generate CalVer version
         id: calver
         run: |
-          echo "🏷️ Generating CalVer tag with robust conflict resolution..."
+          # Generate CalVer format: YY.MM.PATCH (e.g., 24.06.1)
+          YEAR=$(date +%y)
+          MONTH=$(date +%m)
           
-          # Use the robust CalVer script
-          FULL_TAG=$(./scripts/create-calver-tag.sh --prefix=${{ inputs.tag_prefix }} --format=${{ inputs.calver_format }})
-          VERSION_WITHOUT_PREFIX="${FULL_TAG#${{ inputs.tag_prefix }}}"
+          # Get the latest tag for this year.month pattern
+          LATEST_TAG=$(git tag -l "${{ inputs.tag_prefix }}${YEAR}.${MONTH}.*" | sort -V | tail -1)
           
-          echo "version=${VERSION_WITHOUT_PREFIX}" >> $GITHUB_OUTPUT
+          if [ -z "$LATEST_TAG" ]; then
+            # No previous tag for this year.month, start with patch 1
+            PATCH=1
+          else
+            # Extract patch number and increment
+            PATCH=$(echo "$LATEST_TAG" | sed 's/.*\.//' | sed 's/[^0-9]*//g')
+            PATCH=$((PATCH + 1))
+          fi
+          
+          VERSION="${YEAR}.${MONTH}.${PATCH}"
+          FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
-          
-          echo "✅ Generated and pushed tag: ${FULL_TAG}"
-          echo "📋 Version: ${VERSION_WITHOUT_PREFIX}"
+          echo "Generated version: ${FULL_TAG}"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.calver.outputs.full_tag }}
+          git push origin ${{ steps.calver.outputs.full_tag }}
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -146,10 +146,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
-          build-args: |
-            VERSION=${{ steps.calver.outputs.version }}
-            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-            GIT_COMMIT=${{ github.sha }}
 
       - name: Create GitHub Release
         uses: actions/create-release@v1
@@ -167,20 +163,13 @@ jobs:
             
             ### Deployment
             This release can be deployed to Kubernetes using the image tag `${{ steps.calver.outputs.version }}`.
-            
-            ### Build Information
-            - **Commit**: `${{ github.sha }}`
-            - **Build Date**: `${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}`
           draft: false
           prerelease: false
 
       - name: Output image details
         run: |
-          echo "🎯 Build Summary:"
-          echo "=================="
           echo "Version: ${{ steps.calver.outputs.version }}"
           echo "Full tag: ${{ steps.calver.outputs.full_tag }}"
           echo "Image tags: ${{ steps.meta.outputs.tags }}"
           echo "Image digest: ${{ steps.build.outputs.digest }}"
           echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          echo "=================="
