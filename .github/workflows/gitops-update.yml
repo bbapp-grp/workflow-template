@@ -88,11 +88,14 @@ jobs:
             echo "📝 Updating existing image entry for ${{ inputs.service_name }}"
             # Extract first tag only to avoid multiline issues
             FIRST_TAG=$(echo "${{ inputs.image_tag }}" | head -n 1)
-            yq eval ".images[] |= if .name == \"${{ inputs.service_name }}\" then .newTag = \"${FIRST_TAG}\" else . end" kustomization.yaml -i          else
+            yq eval ".images[] |= if .name == \"${{ inputs.service_name }}\" then .newTag = \"${FIRST_TAG}\" else . end" kustomization.yaml -i
+          else
             # Add new image entry
+            echo "➕ Adding new image entry for ${{ inputs.service_name }}"
             # Extract first tag only to avoid multiline issues
             FIRST_TAG=$(echo "${{ inputs.image_tag }}" | head -n 1)
-            yq eval ".images += [{\"name\": \"${{ inputs.service_name }}\", \"newTag\": \"${FIRST_TAG}\"}]" kustomization.yaml -i          fi
+            yq eval ".images += [{\"name\": \"${{ inputs.service_name }}\", \"newTag\": \"${FIRST_TAG}\"}]" kustomization.yaml -i
+          fi
           
           # Show the changes
           echo "📋 Updated kustomization.yaml:"
