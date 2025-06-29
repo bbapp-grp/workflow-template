@@ -1,0 +1,186 @@
+name: Release Build and Push
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Name of the microservice'
+        required: true
+        type: string
+      dockerfile_path:
+        description: 'Path to Dockerfile relative to repo root'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      build_context:
+        description: 'Build context directory'
+        required: false
+        type: string
+        default: '.'
+      gcp_project_id:
+        description: 'GCP Project ID'
+        required: true
+        type: string
+      artifact_registry_region:
+        description: 'Artifact Registry region'
+        required: false
+        type: string
+        default: 'us-central1'
+      artifact_registry_repo:
+        description: 'Artifact Registry repository name'
+        required: false
+        type: string
+        default: 'bbapp-microservices'
+      tag_prefix:
+        description: 'Prefix for version tags'
+        required: false
+        type: string
+        default: 'v'
+      calver_format:
+        description: 'CalVer format: YY.MM.PATCH or YYYY.MM.PATCH'
+        required: false
+        type: string
+        default: 'YY.MM.PATCH'
+    secrets:
+      WIF_PROVIDER:
+        description: 'Workload Identity Federation Provider'
+        required: true
+      WIF_SERVICE_ACCOUNT:
+        description: 'Workload Identity Federation Service Account'
+        required: true
+    outputs:
+      image_tag:
+        description: 'The full image tag that was built and pushed'
+        value: ${{ jobs.build.outputs.image_tag }}
+      image_digest:
+        description: 'The image digest'
+        value: ${{ jobs.build.outputs.image_digest }}
+      version_tag:
+        description: 'The version tag that was created'
+        value: ${{ jobs.build.outputs.version_tag }}
+
+env:
+  REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
+  IMAGE_NAME: ${{ inputs.gcp_project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.service_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+      version_tag: ${{ steps.calver.outputs.version }}
+    
+    permissions:
+      contents: write
+      id-token: write
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup CalVer script
+        run: |
+          # Create the CalVer script if it doesn't exist in the repo
+          if [ ! -f "scripts/create-calver-tag.sh" ]; then
+            echo "📥 CalVer script not found in repo, downloading from workflow template..."
+            mkdir -p scripts
+            curl -sSL https://raw.githubusercontent.com/bbapp-grp/workflow-template/main/scripts/create-calver-tag.sh -o scripts/create-calver-tag.sh
+            chmod +x scripts/create-calver-tag.sh
+          else
+            echo "✅ Using CalVer script from repository"
+            chmod +x scripts/create-calver-tag.sh
+          fi
+
+      - name: Generate CalVer version and create tag
+        id: calver
+        run: |
+          echo "🏷️ Generating CalVer tag with robust conflict resolution..."
+          
+          # Use the robust CalVer script
+          FULL_TAG=$(./scripts/create-calver-tag.sh --prefix=${{ inputs.tag_prefix }} --format=${{ inputs.calver_format }})
+          VERSION_WITHOUT_PREFIX="${FULL_TAG#${{ inputs.tag_prefix }}}"
+          
+          echo "version=${VERSION_WITHOUT_PREFIX}" >> $GITHUB_OUTPUT
+          echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Generated and pushed tag: ${FULL_TAG}"
+          echo "📋 Version: ${VERSION_WITHOUT_PREFIX}"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker to use gcloud as a credential helper
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.calver.outputs.version }}
+            type=raw,value=${{ steps.calver.outputs.full_tag }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ steps.calver.outputs.version }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            GIT_COMMIT=${{ github.sha }}
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag_name: ${{ steps.calver.outputs.full_tag }}
+          release_name: Release ${{ steps.calver.outputs.full_tag }}
+          body: |
+            ## Changes in ${{ steps.calver.outputs.full_tag }}
+            
+            ### Docker Image
+            - **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.calver.outputs.version }}`
+            - **Digest**: `${{ steps.build.outputs.digest }}`
+            
+            ### Deployment
+            This release can be deployed to Kubernetes using the image tag `${{ steps.calver.outputs.version }}`.
+            
+            ### Build Information
+            - **Commit**: `${{ github.sha }}`
+            - **Build Date**: `${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}`
+          draft: false
+          prerelease: false
+
+      - name: Output image details
+        run: |
+          echo "🎯 Build Summary:"
+          echo "=================="
+          echo "Version: ${{ steps.calver.outputs.version }}"
+          echo "Full tag: ${{ steps.calver.outputs.full_tag }}"
+          echo "Image tags: ${{ steps.meta.outputs.tags }}"
+          echo "Image digest: ${{ steps.build.outputs.digest }}"
+          echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "=================="

@@ -1,0 +1,126 @@
+name: Simple Container Build and Push
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Name of the microservice (defaults to repository name)'
+        required: false
+        type: string
+        default: ${{ github.event.repository.name }}
+      dockerfile_path:
+        description: 'Path to Dockerfile relative to repo root'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      build_context:
+        description: 'Build context directory'
+        required: false
+        type: string
+        default: '.'
+      gcp_project_id:
+        description: 'GCP Project ID'
+        required: true
+        type: string
+      artifact_registry_region:
+        description: 'Artifact Registry region'
+        required: false
+        type: string
+        default: 'us-central1'
+      artifact_registry_repo:
+        description: 'Artifact Registry repository name'
+        required: false
+        type: string
+        default: 'bbapp-microservices'
+      image_tag_suffix:
+        description: 'Additional tag suffix for development builds'
+        required: false
+        type: string
+        default: 'latest'
+      build_args:
+        description: 'Docker build arguments (JSON object as string)'
+        required: false
+        type: string
+        default: '{}'
+    secrets:
+      WIF_PROVIDER:
+        description: 'Workload Identity Federation Provider'
+        required: true
+      WIF_SERVICE_ACCOUNT:
+        description: 'Workload Identity Federation Service Account'
+        required: true
+    outputs:
+      image_tag:
+        description: 'The full image tag that was built and pushed'
+        value: ${{ jobs.build.outputs.image_tag }}
+      image_digest:
+        description: 'The image digest'
+        value: ${{ jobs.build.outputs.image_digest }}
+
+env:
+  REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
+  IMAGE_NAME: ${{ inputs.gcp_project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.service_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+    
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker to use gcloud as a credential helper
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.image_tag_suffix }}
+            type=sha,prefix={{branch}}-
+
+      - name: Parse build args
+        id: build_args
+        run: |
+          echo "args<<EOF" >> $GITHUB_OUTPUT
+          echo '${{ inputs.build_args }}' | jq -r 'to_entries | map("\(.key)=\(.value)") | join("\n")'
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ steps.build_args.outputs.args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output image details
+        run: |
+          echo "Image tags: ${{ steps.meta.outputs.tags }}"
+          echo "Image digest: ${{ steps.build.outputs.digest }}"
+          echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
