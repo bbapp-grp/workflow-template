@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: '.'
+      version:
+        description: 'Version to pass to the build (defaults to develop-{SHA})'
+        required: false
+        type: string
+        default: ''
       gcp_project_id:
         description: 'GCP Project ID'
         required: true
@@ -45,6 +50,9 @@ on:
       image_digest:
         description: 'The image digest'
         value: ${{ jobs.build.outputs.image_digest }}
+      version:
+        description: 'The version that was used for the build'
+        value: ${{ jobs.build.outputs.version }}
 
 env:
   REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
@@ -56,6 +64,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
+      version: ${{ steps.version.outputs.version }}
     
     permissions:
       contents: read
@@ -65,6 +74,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="develop-${{ github.sha }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Using version: ${VERSION}"
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -109,9 +129,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            GIT_COMMIT=${{ github.sha }}
 
       - name: Output image details
         run: |
           echo "Image tags: ${{ steps.meta.outputs.tags }}"
           echo "Image digest: ${{ steps.build.outputs.digest }}"
           echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "Version: ${{ steps.version.outputs.version }}"

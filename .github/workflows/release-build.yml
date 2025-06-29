@@ -37,6 +37,11 @@ on:
         type: string
         default: 'v'
       calver_format:
+      version:
+        description: 'Version to use (defaults to CalVer YY.MM.PATCH)'
+        required: false
+        type: string
+        default: ''
         description: 'CalVer format: YY.MM.PATCH or YYYY.MM.PATCH'
         required: false
         type: string
@@ -93,21 +98,36 @@ jobs:
             chmod +x scripts/create-calver-tag.sh
           fi
 
-      - name: Generate CalVer version and create tag
+      - name: Generate or use provided version and create tag
         id: calver
         run: |
-          echo "🏷️ Generating CalVer tag with robust conflict resolution..."
-          
-          # Use the robust CalVer script
-          FULL_TAG=$(./scripts/create-calver-tag.sh --prefix=${{ inputs.tag_prefix }} --format=${{ inputs.calver_format }})
-          VERSION_WITHOUT_PREFIX="${FULL_TAG#${{ inputs.tag_prefix }}}"
-          
-          echo "version=${VERSION_WITHOUT_PREFIX}" >> $GITHUB_OUTPUT
-          echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
-          
-          echo "✅ Generated and pushed tag: ${FULL_TAG}"
-          echo "📋 Version: ${VERSION_WITHOUT_PREFIX}"
-
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "🏷️ Using provided version: ${{ inputs.version }}"
+            VERSION="${{ inputs.version }}"
+            FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
+            
+            # Create and push the tag
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "${FULL_TAG}"
+            git push origin "${FULL_TAG}"
+            
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
+            echo "✅ Created and pushed tag: ${FULL_TAG}"
+          else
+            echo "🏷️ Generating CalVer tag with robust conflict resolution..."
+            
+            # Use the robust CalVer script
+            FULL_TAG=$(./scripts/create-calver-tag.sh --prefix=${{ inputs.tag_prefix }} --format=${{ inputs.calver_format }})
+            VERSION_WITHOUT_PREFIX="${FULL_TAG#${{ inputs.tag_prefix }}}"
+            
+            echo "version=${VERSION_WITHOUT_PREFIX}" >> $GITHUB_OUTPUT
+            echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
+            
+            echo "✅ Generated and pushed tag: ${FULL_TAG}"
+            echo "📋 Version: ${VERSION_WITHOUT_PREFIX}"
+          fi
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@v2
