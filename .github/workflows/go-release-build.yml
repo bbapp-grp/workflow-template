@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: '.'
+      version:
+        description: 'Version to use (defaults to CalVer YY.MM.PATCH)'
+        required: false
+        type: string
+        default: ''
       gcp_project_id:
         description: 'GCP Project ID'
         required: true
@@ -54,6 +59,9 @@ on:
       version_tag:
         description: 'The version tag that was created'
         value: ${{ jobs.build.outputs.version_tag }}
+      version:
+        description: 'The version that was used for the build'
+        value: ${{ jobs.build.outputs.version }}
 
 env:
   REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
@@ -65,7 +73,8 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
-      version_tag: ${{ steps.calver.outputs.version }}
+      version_tag: ${{ steps.version.outputs.full_tag }}
+      version: ${{ steps.version.outputs.version }}
     
     permissions:
       contents: write
@@ -75,38 +84,117 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate CalVer version
-        id: calver
+      - name: Determine version
+        id: version
         run: |
-          # Generate CalVer format: YY.MM.PATCH (e.g., 25.06.1)
-          YEAR=$(date +%y)
-          MONTH=$(date +%m)
-          
-          # Get the latest tag for this year.month pattern
-          LATEST_TAG=$(git tag -l "${{ inputs.tag_prefix }}${YEAR}.${MONTH}.*" | sort -V | tail -1)
-          
-          if [ -z "$LATEST_TAG" ]; then
-            # No previous tag for this year.month, start with patch 1
-            PATCH=1
+          if [ -n "${{ inputs.version }}" ]; then
+            # Use provided version
+            VERSION="${{ inputs.version }}"
+            FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
+            
+            # Create and push the tag
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "${FULL_TAG}" -m "Release ${FULL_TAG} [skip ci]"
+            git push origin "${FULL_TAG}"
+            
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
+            echo "Using provided version: ${FULL_TAG}"
           else
-            # Extract patch number and increment
-            PATCH=$(echo "$LATEST_TAG" | sed 's/.*\.//' | sed 's/[^0-9]*//g')
-            PATCH=$((PATCH + 1))
+            # Embedded CalVer logic with conflict resolution
+            echo "Generating CalVer version with robust conflict resolution..."
+            
+            # Configuration
+            PREFIX="${{ inputs.tag_prefix }}"
+            FORMAT="YY.MM.PATCH"
+            
+            # Configure git user for CI
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            
+            # Get current date components
+            YEAR=$(date +%y)
+            MONTH=$(date +%m)
+            YEAR_MONTH="${YEAR}.${MONTH}"
+            
+            echo "[INFO] Current period: $YEAR_MONTH"
+            
+            # Fetch all remote tags
+            echo "[INFO] Fetching all remote tags..."
+            git fetch --tags --force origin 2>/dev/null || git fetch --tags origin 2>/dev/null || true
+            
+            # Find all existing tags for this year.month pattern
+            PATTERN="${PREFIX}${YEAR_MONTH}.*"
+            echo "[INFO] Searching for existing tags with pattern: $PATTERN"
+            
+            # Get all matching tags
+            ALL_TAGS=$(git tag -l "$PATTERN" 2>/dev/null || echo "")
+            if git remote get-url origin >/dev/null 2>&1; then
+                REMOTE_TAGS=$(git ls-remote --tags origin 2>/dev/null | \
+                              grep "refs/tags/${PREFIX}${YEAR_MONTH}\." | \
+                              sed 's|.*refs/tags/||' || echo "")
+                if [[ -n "$REMOTE_TAGS" ]]; then
+                    ALL_TAGS=$(printf "%s\n%s" "$ALL_TAGS" "$REMOTE_TAGS" | sort -u | grep -v '^$' || echo "")
+                fi
+            fi
+            
+            # Find the highest patch number
+            HIGHEST_PATCH=0
+            if [[ -n "$ALL_TAGS" ]]; then
+                echo "[INFO] Existing tags found for $YEAR_MONTH"
+                while read -r tag; do
+                    if [[ -n "$tag" && "$tag" =~ ^${PREFIX}${YEAR_MONTH}\.([0-9]+)$ ]]; then
+                        PATCH="${BASH_REMATCH[1]}"
+                        if [[ "$PATCH" -gt "$HIGHEST_PATCH" ]]; then
+                            HIGHEST_PATCH="$PATCH"
+                        fi
+                    fi
+                done <<< "$ALL_TAGS"
+                echo "[INFO] Highest existing patch number: $HIGHEST_PATCH"
+            else
+                echo "[INFO] No existing tags found for $YEAR_MONTH"
+            fi
+            
+            # Generate next patch number
+            NEXT_PATCH=$((HIGHEST_PATCH + 1))
+            NEW_TAG="${PREFIX}${YEAR_MONTH}.${NEXT_PATCH}"
+            
+            echo "[SUCCESS] Generated new tag: $NEW_TAG"
+            
+            # Double-check the tag doesn't exist
+            if git tag -l "$NEW_TAG" | grep -q "^${NEW_TAG}$" 2>/dev/null; then
+                echo "[ERROR] Tag $NEW_TAG already exists locally!"
+                exit 1
+            fi
+            
+            if git remote get-url origin >/dev/null 2>&1; then
+                if git ls-remote --tags origin 2>/dev/null | grep -q "refs/tags/${NEW_TAG}$"; then
+                    echo "[ERROR] Tag $NEW_TAG already exists on remote!"
+                    exit 1
+                fi
+            fi
+            
+            # Create and push the tag
+            echo "[INFO] Creating tag: $NEW_TAG"
+            git tag "$NEW_TAG" -m "Release $NEW_TAG [skip ci]"
+            echo "[SUCCESS] Created local tag: $NEW_TAG"
+            
+            echo "[INFO] Pushing tag to remote..."
+            if git push origin "$NEW_TAG" 2>/dev/null; then
+                echo "[SUCCESS] Successfully pushed tag to remote: $NEW_TAG"
+            else
+                echo "[ERROR] Failed to push tag to remote"
+                git tag -d "$NEW_TAG" 2>/dev/null || true
+                exit 1
+            fi
+            
+            # Set outputs
+            VERSION_WITHOUT_PREFIX="${NEW_TAG#${{ inputs.tag_prefix }}}"
+            echo "version=${VERSION_WITHOUT_PREFIX}" >> $GITHUB_OUTPUT
+            echo "full_tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+            echo "Generated and pushed tag: ${NEW_TAG}"
           fi
-          
-          VERSION="${YEAR}.${MONTH}.${PATCH}"
-          FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
-          
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
-          echo "Generated version: ${FULL_TAG}"
-
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.calver.outputs.full_tag }}
-          git push origin ${{ steps.calver.outputs.full_tag }}
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -120,6 +208,12 @@ jobs:
 
       - name: Configure Docker to use gcloud as a credential helper
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          driver-opts: |
+            network=host
 
       - name: Extract metadata
         id: meta
@@ -127,9 +221,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.calver.outputs.version }}
-            type=raw,value=${{ steps.calver.outputs.full_tag }}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.full_tag }}
 
       - name: Build and push Docker image
         id: build
@@ -144,37 +237,37 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             BUILDTIME=${{ github.run_id }}
-            VERSION=${{ steps.calver.outputs.version }}
+            VERSION=${{ steps.version.outputs.version }}
 
       - name: Create GitHub Release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
-          tag_name: ${{ steps.calver.outputs.full_tag }}
-          release_name: Release ${{ steps.calver.outputs.full_tag }}
+          tag_name: ${{ steps.version.outputs.full_tag }}
+          release_name: Release ${{ steps.version.outputs.full_tag }}
           body: |
-            ## Go Microservice Release ${{ steps.calver.outputs.full_tag }}
+            ## Go Microservice Release ${{ steps.version.outputs.full_tag }}
             
             ### Docker Image
-            - **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.calver.outputs.version }}`
+            - **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}`
             - **Digest**: `${{ steps.build.outputs.digest }}`
             
             ### Build Details
             - **Built with**: Docker multi-stage build
             - **All logic in**: Dockerfile (Go compilation, testing, optimization)
-            - **Build Args**: VERSION=${{ steps.calver.outputs.version }}, BUILDTIME=${{ github.run_id }}
+            - **Build Args**: VERSION=${{ steps.version.outputs.version }}, BUILDTIME=${{ github.run_id }}
             
             ### Deployment
-            This release can be deployed to Kubernetes using the image tag `${{ steps.calver.outputs.version }}`.
+            This release can be deployed to Kubernetes using the image tag `${{ steps.version.outputs.version }}`.
           draft: false
           prerelease: false
 
       - name: Output image details
         run: |
           echo "🎉 Go release build completed!"
-          echo "📦 Version: ${{ steps.calver.outputs.version }}"
-          echo "🏷️  Full tag: ${{ steps.calver.outputs.full_tag }}"
+          echo "📦 Version: ${{ steps.version.outputs.version }}"
+          echo "🏷️  Full tag: ${{ steps.version.outputs.full_tag }}"
           echo "📦 Image tags: ${{ steps.meta.outputs.tags }}"
           echo "🔗 Digest: ${{ steps.build.outputs.digest }}"
           echo "🏗️  All build logic handled in Dockerfile"

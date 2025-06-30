@@ -1,4 +1,4 @@
-name: Development Build and Push
+name: Release Build and Push
 
 on:
   workflow_call:
@@ -17,11 +17,6 @@ on:
         required: false
         type: string
         default: '.'
-      version:
-        description: 'Version to pass to the build (defaults to develop-{SHA})'
-        required: false
-        type: string
-        default: ''
       gcp_project_id:
         description: 'GCP Project ID'
         required: true
@@ -36,6 +31,16 @@ on:
         required: false
         type: string
         default: 'bbapp-microservices'
+      tag_prefix:
+        description: 'Prefix for version tags'
+        required: false
+        type: string
+        default: 'v'
+      calver_format:
+        description: 'CalVer format: YY.MM.PATCH or YYYY.MM.PATCH'
+        required: false
+        type: string
+        default: 'YY.MM.PATCH'
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation Provider'
@@ -50,9 +55,9 @@ on:
       image_digest:
         description: 'The image digest'
         value: ${{ jobs.build.outputs.image_digest }}
-      version:
-        description: 'The version that was used for the build'
-        value: ${{ jobs.build.outputs.version }}
+      version_tag:
+        description: 'The version tag that was created'
+        value: ${{ jobs.build.outputs.version_tag }}
 
 env:
   REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
@@ -64,10 +69,10 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
-      version: ${{ steps.version.outputs.version }}
+      version_tag: ${{ steps.calver.outputs.version }}
     
     permissions:
-      contents: read
+      contents: write
       id-token: write
       packages: write
 
@@ -75,16 +80,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Determine version
-        id: version
+      - name: Setup CalVer script
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          # Create the CalVer script if it doesn't exist in the repo
+          if [ ! -f "scripts/create-calver-tag.sh" ]; then
+            echo "📥 CalVer script not found in repo, downloading from workflow template..."
+            mkdir -p scripts
+            curl -sSL https://raw.githubusercontent.com/bbapp-grp/workflow-template/main/scripts/create-calver-tag.sh -o scripts/create-calver-tag.sh
+            chmod +x scripts/create-calver-tag.sh
           else
-            VERSION="develop-${{ github.sha }}"
+            echo "✅ Using CalVer script from repository"
+            chmod +x scripts/create-calver-tag.sh
           fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Using version: ${VERSION}"
+
+      - name: Generate CalVer version and create tag
+        id: calver
+        run: |
+          echo "🏷️ Generating CalVer tag with robust conflict resolution..."
+          
+          # Use the robust CalVer script
+          FULL_TAG=$(./scripts/create-calver-tag.sh --prefix=${{ inputs.tag_prefix }} --format=${{ inputs.calver_format }})
+          VERSION_WITHOUT_PREFIX="${FULL_TAG#${{ inputs.tag_prefix }}}"
+          
+          echo "version=${VERSION_WITHOUT_PREFIX}" >> $GITHUB_OUTPUT
+          echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Generated and pushed tag: ${FULL_TAG}"
+          echo "📋 Version: ${VERSION_WITHOUT_PREFIX}"
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -113,7 +135,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=sha,prefix=develop-
+            type=raw,value=${{ steps.calver.outputs.version }}
+            type=raw,value=${{ steps.calver.outputs.full_tag }}
 
       - name: Build and push Docker image
         id: build
@@ -128,13 +151,40 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
           build-args: |
-            VERSION=${{ steps.version.outputs.version }}
+            VERSION=${{ steps.calver.outputs.version }}
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             GIT_COMMIT=${{ github.sha }}
 
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag_name: ${{ steps.calver.outputs.full_tag }}
+          release_name: Release ${{ steps.calver.outputs.full_tag }}
+          body: |
+            ## Changes in ${{ steps.calver.outputs.full_tag }}
+            
+            ### Docker Image
+            - **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.calver.outputs.version }}`
+            - **Digest**: `${{ steps.build.outputs.digest }}`
+            
+            ### Deployment
+            This release can be deployed to Kubernetes using the image tag `${{ steps.calver.outputs.version }}`.
+            
+            ### Build Information
+            - **Commit**: `${{ github.sha }}`
+            - **Build Date**: `${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}`
+          draft: false
+          prerelease: false
+
       - name: Output image details
         run: |
+          echo "🎯 Build Summary:"
+          echo "=================="
+          echo "Version: ${{ steps.calver.outputs.version }}"
+          echo "Full tag: ${{ steps.calver.outputs.full_tag }}"
           echo "Image tags: ${{ steps.meta.outputs.tags }}"
           echo "Image digest: ${{ steps.build.outputs.digest }}"
           echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          echo "Version: ${{ steps.version.outputs.version }}"
+          echo "=================="

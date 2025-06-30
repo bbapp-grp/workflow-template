@@ -1,4 +1,4 @@
-name: Go Development Build
+name: Go Release Build
 
 on:
   workflow_call:
@@ -18,11 +18,6 @@ on:
         required: false
         type: string
         default: '.'
-      version:
-        description: 'Version to pass to the build (defaults to develop-{SHA})'
-        required: false
-        type: string
-        default: ''
       gcp_project_id:
         description: 'GCP Project ID'
         required: true
@@ -37,6 +32,11 @@ on:
         required: false
         type: string
         default: 'bbapp-microservices'
+      tag_prefix:
+        description: 'Prefix for version tags'
+        required: false
+        type: string
+        default: 'v'
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation Provider'
@@ -51,9 +51,9 @@ on:
       image_digest:
         description: 'The image digest'
         value: ${{ jobs.build.outputs.image_digest }}
-      version:
-        description: 'The version that was used for the build'
-        value: ${{ jobs.build.outputs.version }}
+      version_tag:
+        description: 'The version tag that was created'
+        value: ${{ jobs.build.outputs.version_tag }}
 
 env:
   REGISTRY: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
@@ -65,26 +65,48 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
-      version: ${{ steps.version.outputs.version }}
+      version_tag: ${{ steps.calver.outputs.version }}
     
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Determine version
-        id: version
+      - name: Generate CalVer version
+        id: calver
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          # Generate CalVer format: YY.MM.PATCH (e.g., 25.06.1)
+          YEAR=$(date +%y)
+          MONTH=$(date +%m)
+          
+          # Get the latest tag for this year.month pattern
+          LATEST_TAG=$(git tag -l "${{ inputs.tag_prefix }}${YEAR}.${MONTH}.*" | sort -V | tail -1)
+          
+          if [ -z "$LATEST_TAG" ]; then
+            # No previous tag for this year.month, start with patch 1
+            PATCH=1
           else
-            VERSION="develop-${{ github.sha }}"
+            # Extract patch number and increment
+            PATCH=$(echo "$LATEST_TAG" | sed 's/.*\.//' | sed 's/[^0-9]*//g')
+            PATCH=$((PATCH + 1))
           fi
+          
+          VERSION="${YEAR}.${MONTH}.${PATCH}"
+          FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
+          
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Using version: ${VERSION}"
+          echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
+          echo "Generated version: ${FULL_TAG}"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.calver.outputs.full_tag }}
+          git push origin ${{ steps.calver.outputs.full_tag }}
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -111,7 +133,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,prefix=develop-
+            type=raw,value=latest
+            type=raw,value=${{ steps.calver.outputs.version }}
+            type=raw,value=${{ steps.calver.outputs.full_tag }}
 
       - name: Build and push Docker image
         id: build
@@ -126,13 +150,37 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             BUILDTIME=${{ github.run_id }}
-            VERSION=${{ steps.version.outputs.version }}
+            VERSION=${{ steps.calver.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag_name: ${{ steps.calver.outputs.full_tag }}
+          release_name: Release ${{ steps.calver.outputs.full_tag }}
+          body: |
+            ## Go Microservice Release ${{ steps.calver.outputs.full_tag }}
+            
+            ### Docker Image
+            - **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.calver.outputs.version }}`
+            - **Digest**: `${{ steps.build.outputs.digest }}`
+            
+            ### Build Details
+            - **Built with**: Docker multi-stage build
+            - **All logic in**: Dockerfile (Go compilation, testing, optimization)
+            - **Build Args**: VERSION=${{ steps.calver.outputs.version }}, BUILDTIME=${{ github.run_id }}
+            
+            ### Deployment
+            This release can be deployed to Kubernetes using the image tag `${{ steps.calver.outputs.version }}`.
+          draft: false
+          prerelease: false
 
       - name: Output image details
         run: |
-          echo "🚀 Go development build completed!"
+          echo "🎉 Go release build completed!"
+          echo "📦 Version: ${{ steps.calver.outputs.version }}"
+          echo "🏷️  Full tag: ${{ steps.calver.outputs.full_tag }}"
           echo "📦 Image tags: ${{ steps.meta.outputs.tags }}"
           echo "🔗 Digest: ${{ steps.build.outputs.digest }}"
-          echo "🏷️  Repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          echo "📝 Version: ${{ steps.version.outputs.version }}"
-          echo "📝 All build logic handled in Dockerfile"
+          echo "🏗️  All build logic handled in Dockerfile"

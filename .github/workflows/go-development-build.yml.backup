@@ -1,4 +1,4 @@
-name: Simple Container Build and Push
+name: Go Development Build
 
 on:
   workflow_call:
@@ -32,16 +32,6 @@ on:
         required: false
         type: string
         default: 'bbapp-microservices'
-      image_tag_suffix:
-        description: 'Additional tag suffix for development builds'
-        required: false
-        type: string
-        default: 'latest'
-      build_args:
-        description: 'Docker build arguments (JSON object as string)'
-        required: false
-        type: string
-        default: '{}'
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation Provider'
@@ -71,7 +61,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      packages: write
 
     steps:
       - name: Checkout repository
@@ -102,15 +91,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ inputs.image_tag_suffix }}
-            type=sha,prefix={{branch}}-
-
-      - name: Parse build args
-        id: build_args
-        run: |
-          echo "args<<EOF" >> $GITHUB_OUTPUT
-          echo '${{ inputs.build_args }}' | jq -r 'to_entries | map("\(.key)=\(.value)") | join("\n")'
-          echo "EOF" >> $GITHUB_OUTPUT
+            type=raw,value=latest
+            type=sha,prefix=develop-
 
       - name: Build and push Docker image
         id: build
@@ -121,12 +103,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ steps.build_args.outputs.args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            BUILDTIME=${{ github.run_id }}
+            VERSION=develop-${{ github.sha }}
 
       - name: Output image details
         run: |
-          echo "Image tags: ${{ steps.meta.outputs.tags }}"
-          echo "Image digest: ${{ steps.build.outputs.digest }}"
-          echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "🚀 Go development build completed!"
+          echo "📦 Image tags: ${{ steps.meta.outputs.tags }}"
+          echo "🔗 Digest: ${{ steps.build.outputs.digest }}"
+          echo "🏷️  Repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "📝 All build logic handled in Dockerfile"

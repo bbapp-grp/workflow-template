@@ -53,6 +53,11 @@ jobs:
           ref: ${{ inputs.k8s_repo_branch }}
           path: k8s-repo
       
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Update kustomization with new image
         working-directory: k8s-repo/${{ inputs.kustomize_path }}
         run: |
@@ -65,41 +70,32 @@ jobs:
           # Create a backup of the original file
           cp kustomization.yaml kustomization.yaml.bak
           
-          # Extract first tag only to avoid multiline issues
-          export FIRST_TAG=$(echo "${{ inputs.image_tag }}" | sed -n "1p")
-          export REGISTRY_IMAGE=$(echo "$FIRST_TAG" | cut -d ':' -f 1)
-          export NEW_TAG=$(echo "$FIRST_TAG" | cut -d ':' -f 2)
-          
-          # Validate that we're using a full registry path (not short image name)
-          if [[ ! "$REGISTRY_IMAGE" =~ \. ]]; then
-            echo "❌ Error: Image name must be a full registry path (e.g., asia-south1-docker.pkg.dev/...)"
-            echo "   Got: $REGISTRY_IMAGE"
-            echo "   This prevents short image names in k8s manifests"
-            exit 1
-          fi
-          
-          echo "🏷️ Processing image update:"
-          echo "  Full tag: $FIRST_TAG"
-          echo "  Registry image: $REGISTRY_IMAGE"
-          echo "  New tag: $NEW_TAG"
+          # Extract the image name without the tag
+          IMAGE_NAME=$(echo "${{ inputs.image_tag }}" | head -n 1 | cut -d ':' -f 1)
           
           # Check if images section exists
           if ! yq eval '.images' kustomization.yaml > /dev/null 2>&1; then
             # Add images section if it doesn't exist
-            echo "➕ Adding images section to kustomization.yaml"
+            echo "Adding images section to kustomization.yaml"
             yq eval '.images = []' kustomization.yaml -i
           fi
           
-          # Clean up any existing entries for this service
-          # We only support full registry image names, so clean up both possible formats
-          echo "🧹 Cleaning up any existing entries for ${{ inputs.service_name }}"
-          yq eval 'del(.images[] | select(.name == "${{ inputs.service_name }}"))' kustomization.yaml -i
-          yq eval 'del(.images[] | select(.name == env(REGISTRY_IMAGE)))' kustomization.yaml -i
+          # Check if image entry exists
+          IMAGE_EXISTS=$(yq eval ".images[] | select(.name == \"${{ inputs.service_name }}\")" kustomization.yaml 2>/dev/null || true)
           
-          # Add the correct entry using ONLY full registry path format
-          # This ensures we never use short image names in k8s manifests
-          echo "➕ Adding new image entry for ${REGISTRY_IMAGE} (full registry path only)"
-          yq eval '.images += [{"name": env(REGISTRY_IMAGE), "newTag": env(NEW_TAG)}]' kustomization.yaml -i
+          if [ -n "$IMAGE_EXISTS" ]; then
+            # Update existing image entry
+            echo "📝 Updating existing image entry for ${{ inputs.service_name }}"
+            # Extract first tag only to avoid multiline issues
+            export FIRST_TAG=$(echo "${{ inputs.image_tag }}" | sed -n "1p")
+            yq eval '(.images[] | select(.name == "${{ inputs.service_name }}") | .newTag) = env(FIRST_TAG)' kustomization.yaml -i
+          else
+            # Add new image entry
+            echo "➕ Adding new image entry for ${{ inputs.service_name }}"
+            # Extract first tag only to avoid multiline issues
+            export FIRST_TAG=$(echo "${{ inputs.image_tag }}" | sed -n "1p")
+            yq eval '.images += [{"name": "${{ inputs.service_name }}", "newTag": env(FIRST_TAG)}]' kustomization.yaml -i
+          fi
           
           # Show the changes
           echo "📋 Updated kustomization.yaml:"

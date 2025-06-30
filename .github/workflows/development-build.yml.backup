@@ -1,13 +1,12 @@
-name: Simple Container Build and Push
+name: Development Build and Push
 
 on:
   workflow_call:
     inputs:
       service_name:
-        description: 'Name of the microservice (defaults to repository name)'
-        required: false
+        description: 'Name of the microservice'
+        required: true
         type: string
-        default: ${{ github.event.repository.name }}
       dockerfile_path:
         description: 'Path to Dockerfile relative to repo root'
         required: false
@@ -32,16 +31,6 @@ on:
         required: false
         type: string
         default: 'bbapp-microservices'
-      image_tag_suffix:
-        description: 'Additional tag suffix for development builds'
-        required: false
-        type: string
-        default: 'latest'
-      build_args:
-        description: 'Docker build arguments (JSON object as string)'
-        required: false
-        type: string
-        default: '{}'
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation Provider'
@@ -89,6 +78,7 @@ jobs:
 
       - name: Configure Docker to use gcloud as a credential helper
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
@@ -102,15 +92,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ inputs.image_tag_suffix }}
-            type=sha,prefix={{branch}}-
-
-      - name: Parse build args
-        id: build_args
-        run: |
-          echo "args<<EOF" >> $GITHUB_OUTPUT
-          echo '${{ inputs.build_args }}' | jq -r 'to_entries | map("\(.key)=\(.value)") | join("\n")'
-          echo "EOF" >> $GITHUB_OUTPUT
+            type=sha,prefix=develop-
+          # Only output the SHA-based tag
+          flavor: |
+            latest=false
 
       - name: Build and push Docker image
         id: build
@@ -121,9 +106,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ steps.build_args.outputs.args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          platforms: linux/amd64
 
       - name: Output image details
         run: |
