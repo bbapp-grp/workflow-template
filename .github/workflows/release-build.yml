@@ -122,12 +122,28 @@ jobs:
               PATCH=1
             else
               # Extract patch number and increment
-              PATCH=$(echo "$LATEST_TAG" | sed 's/.*\.//' | sed 's/[^0-9]*//g')
+              PATCH=$(echo "$LATEST_TAG" | grep -o '[0-9]*$')
               PATCH=$((PATCH + 1))
             fi
             
             VERSION="${YEAR}.${MONTH}.${PATCH}"
             FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
+            
+            # Check if tag already exists remotely
+            if git ls-remote --tags origin | grep -q "refs/tags/${FULL_TAG}$"; then
+              echo "⚠️ Tag ${FULL_TAG} already exists remotely. Incrementing patch number..."
+              PATCH=$((PATCH + 1))
+              VERSION="${YEAR}.${MONTH}.${PATCH}"
+              FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
+            fi
+            
+            # Double-check the new tag doesn't exist
+            while git ls-remote --tags origin | grep -q "refs/tags/${FULL_TAG}$"; do
+              echo "⚠️ Tag ${FULL_TAG} also exists. Incrementing further..."
+              PATCH=$((PATCH + 1))
+              VERSION="${YEAR}.${MONTH}.${PATCH}"
+              FULL_TAG="${{ inputs.tag_prefix }}${VERSION}"
+            done
             
             # Create and push the tag
             git config user.name "github-actions[bot]"
