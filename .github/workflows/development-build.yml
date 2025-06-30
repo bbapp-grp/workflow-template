@@ -88,10 +88,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=raw,value=latest
             type=sha,prefix=develop-
-          # Only output the SHA-based tag
-          flavor: |
-            latest=false
 
       - name: Build and push Docker image
         id: build

@@ -64,7 +64,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
-      version_tag: ${{ steps.calver.outputs.version }}
+      version_tag: ${{ steps.calver.outputs.calver_tag }}
     
     permissions:
       contents: write
@@ -78,11 +78,14 @@ jobs:
       - name: Generate CalVer version
         id: calver
         run: |
-          # Generate CalVer format: YY.MM.PATCH (e.g., 24.06.1)
+          # Fetch all tags from remote to ensure we have the latest
+          git fetch --tags
+          
+          # Generate CalVer format: YY.MM.PATCH (e.g., 25.06.1)
           YEAR=$(date +%y)
           MONTH=$(date +%m)
           
-          # Get the latest tag for this year.month pattern
+          # Get the latest tag for this year.month pattern from remote
           LATEST_TAG=$(git tag -l "${{ inputs.tag_prefix }}${YEAR}.${MONTH}.*" | sort -V | tail -1)
           
           if [ -z "$LATEST_TAG" ]; then
@@ -100,13 +103,6 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
           echo "Generated version: ${FULL_TAG}"
-
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.calver.outputs.full_tag }}
-          git push origin ${{ steps.calver.outputs.full_tag }}
 
       - name: Authenticate to Google Cloud
         id: auth
