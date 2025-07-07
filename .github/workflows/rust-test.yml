@@ -1,0 +1,106 @@
+name: Rust Test
+
+on:
+  workflow_call:
+    inputs:
+      rust_version:
+        description: 'Rust version to use'
+        required: false
+        type: string
+        default: 'stable'
+      working_directory:
+        description: 'Working directory for the Rust project'
+        required: false
+        type: string
+        default: '.'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust_version }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ inputs.working_directory }}/target
+          key: ${{ runner.os }}-cargo-${{ inputs.rust_version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ inputs.rust_version }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Check Cargo.toml format
+        run: |
+          if command -v cargo-sort &> /dev/null; then
+            cargo sort --check
+          else
+            echo "cargo-sort not installed, skipping"
+          fi
+
+      - name: Run cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: Run cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run cargo check
+        run: cargo check --all-targets --all-features
+
+      - name: Run tests
+        run: cargo test --verbose --all-features
+
+      - name: Run doc tests
+        run: cargo test --doc --verbose
+
+      - name: Check documentation
+        run: cargo doc --no-deps --document-private-items --all-features
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  security:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ inputs.working_directory }}/target
+          key: ${{ runner.os }}-cargo-security-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
+
+      - name: Run cargo deny
+        run: cargo deny check
