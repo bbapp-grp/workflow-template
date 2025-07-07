@@ -1,6 +1,8 @@
 # Complete GitOps CI/CD Flow
 
-This document shows the end-to-end CI/CD and GitOps flow we've implemented for the BBApp microservices.
+> **⚠️ DEPRECATED**: This document describes the old GitOps approach using FluxCD that is no longer used. We have migrated to direct deployment using GitHub Actions. This document is kept for historical reference only.
+
+This document shows the end-to-end CI/CD and GitOps flow we previously implemented for the BBApp microservices.
 
 ## Architecture Overview
 

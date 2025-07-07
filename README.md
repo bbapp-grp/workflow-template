@@ -2,15 +2,17 @@
 
 This repository contains reusable GitHub Actions workflow templates for the BBApp microservices ecosystem. These templates provide standardized CI/CD pipelines that can be used across all microservices to ensure consistency and reduce code duplication.
 
+📖 **See [CURRENT-CICD-FLOW.md](CURRENT-CICD-FLOW.md) for complete deployment architecture and patterns.**
+
 ## Overview
 
 The templates support:
 - **Development builds**: Automated builds on `develop` branch with `latest` and commit-based tags
-- **Release builds**: Automated builds on `main` branch with CalVer versioning and GitHub releases
+- **Release builds**: Automated builds on `main` branch with CalVer versioning and GitHub releases  
 - **Google Artifact Registry**: Secure image storage using Workload Identity Federation
-- **Multi-language support**: Configurable for Node.js, Python, Go, and other languages
+- **Multi-language support**: Configurable for Node.js, Python, Go, Rust and other languages
 - **Flexible testing**: Optional test execution with configurable commands
-- **GitOps integration**: Outputs that can be used to update Kubernetes manifests
+- **Direct deployment**: Immediate kubectl-based deployment to GKE (no GitOps)
 
 ## Workflows
 
@@ -33,18 +35,7 @@ Triggers on pushes to the `main` branch, creates CalVer tags, and builds product
 - Tags images with version numbers
 - Git tag creation and push
 
-### 3. GitOps Manifest Update (`gitops-update.yml`)
-
-Updates Kubernetes manifests in a separate repository after successful image builds.
-
-**Key Features:**
-- Updates kustomize image tags automatically
-- Supports both direct commits and PR creation
-- Validates kustomization before committing
-- Configurable for different environments (dev/staging/prod)
-- Detailed commit messages with traceability
-
-### 4. Test Templates
+### 3. Test Templates
 
 Language-specific reusable test workflows that can be used as separate jobs before building:
 
@@ -106,17 +97,6 @@ Your microservice repository should have:
 - A `Dockerfile` in the root (or specify custom path)
 - A `package.json` if using Node.js features
 - Proper test scripts if enabling test execution
-
-### 4. GitOps Integration (Optional)
-
-For automatic Kubernetes manifest updates:
-
-- **K8s Repository**: A separate repository (e.g., `bbapp-grp/k8s`) with kustomize manifests
-- **Kustomize Structure**: Base manifests and environment overlays
-- **GitHub Token**: Personal Access Token with access to the k8s repository
-- **FluxCD**: Configured to watch the k8s repository
-
-See [`examples/k8s-repo-structure.md`](examples/k8s-repo-structure.md) for detailed setup instructions.
 
 ## Usage Examples
 

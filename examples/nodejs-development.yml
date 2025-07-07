@@ -30,19 +30,38 @@ jobs:
       WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-  update-manifests:
-    name: Update K8s Manifests
+  # Direct deployment to development environment
+  deploy-dev:
     needs: build
-    if: success()
+    runs-on: ubuntu-latest
+    environment: development
     
-    uses: bbapp-grp/workflow-template/.github/workflows/gitops-update.yml@main
-    with:
-      service_name: ${{ github.event.repository.name }}
-      image_tag: ${{ needs.build.outputs.image_tag }}
-      image_digest: ${{ needs.build.outputs.image_digest }}
-      k8s_repo: 'bbapp-grp/k8s'
-      k8s_repo_branch: 'main'
-      kustomize_path: 'overlays/dev'
-      create_pr: false  # Direct commit for dev environment
-    secrets:
-      K8S_REPO_TOKEN: ${{ secrets.K8S_REPO_TOKEN }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gke-gcloud-auth-plugin
+        run: |
+          gcloud components install gke-gcloud-auth-plugin
+
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials ${{ vars.GKE_CLUSTER_NAME }} --zone=${{ vars.GCP_ZONE }} --project=${{ vars.GCP_PROJECT_ID }}
+
+      - name: Deploy to development
+        run: |
+          # Update image tag in the deployment
+          export NEW_IMAGE="asia-south1-docker.pkg.dev/bb-app-461714/bbapp-images/${{ github.event.repository.name }}:develop-${{ github.sha }}"
+          kubectl set image deployment/${{ github.event.repository.name }} ${{ github.event.repository.name }}=$NEW_IMAGE -n development
+          kubectl rollout status deployment/${{ github.event.repository.name }} -n development --timeout=300s
